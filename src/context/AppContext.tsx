@@ -1,7 +1,8 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, ReactNode, useMemo, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useReducer, ReactNode, useMemo, useEffect, useCallback, useState } from 'react';
 import { supabase } from '@/src/lib/supabaseClient';
+import { User } from '@supabase/supabase-js';
 
 // ====================
 // Type Definitions
@@ -75,42 +76,8 @@ type Action =
 // ====================
 
 const initialState: AppState = {
-  tasks: [
-    {
-      id: 'task-1',
-      title: 'Complete Firefly AI prototype',
-      description: 'Build the core dashboard and state management for the hackathon submission',
-      urgencyScore: 'HIGH',
-      status: 'Pending',
-      estimatedHours: 8,
-      immediateFirstStep: 'Set up React Context and TypeScript interfaces',
-      actionableChecklist: [
-        'Create AppContext.tsx with proper typing',
-        'Implement useApp hook for consumption',
-        'Test context provider with sample data',
-        'Document state structure in memory file'
-      ],
-      deadline: new Date('2026-06-29T14:00:00'), // Hackathon deadline
-      createdAt: new Date('2026-06-25T10:00:00'),
-      updatedAt: new Date('2026-06-25T10:00:00')
-    }
-  ],
-  habits: [
-    {
-      id: 'habit-1',
-      title: 'Morning Deep Work Block',
-      completedToday: false,
-      streakDays: 5,
-      lastCompleted: new Date('2026-06-24T09:00:00')
-    },
-    {
-      id: 'habit-2',
-      title: 'Evening Task Review',
-      completedToday: true,
-      streakDays: 12,
-      lastCompleted: new Date('2026-06-25T18:00:00')
-    }
-  ],
+  tasks: [],
+  habits: [],
   activeEmailDraft: null,
   isRecordingVoice: false,
   lastVoiceRecording: {
@@ -233,6 +200,8 @@ function appReducer(state: AppState, action: Action): AppState {
 interface AppContextType {
   state: AppState;
   dispatch: React.Dispatch<Action>;
+  user: User | null;
+  loading: boolean;
   // Convenience actions
   addTask: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { status?: TaskStatus }) => void;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
@@ -240,6 +209,7 @@ interface AppContextType {
   createFirefighterEmail: (task: Task, recipient: string) => void;
   toggleVoiceRecording: () => void;
   clearActiveEmailDraft: () => void;
+  signOut: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -252,35 +222,57 @@ interface AppProviderProps {
   children: ReactNode;
 }
 
-// Helper to get or create a session ID
-const getSessionId = () => {
-  if (typeof window === 'undefined') return 'server';
-  let sessionId = localStorage.getItem('firefly_session_id');
-  if (!sessionId) {
-    sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    localStorage.setItem('firefly_session_id', sessionId);
-  }
-  return sessionId;
-};
-
 export function AppProvider({ children }: AppProviderProps) {
   const [state, dispatch] = useReducer(appReducer, initialState);
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // 1. Fetch saved tasks and habits from Supabase on mount
+  // 1. Get initial session and listen to auth changes
   useEffect(() => {
+    const getInitialSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setUser(session?.user ?? null);
+      } catch (err) {
+        console.error('Error getting initial session:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    getInitialSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // 2. Fetch saved tasks and habits from Supabase when user changes
+  useEffect(() => {
+    if (!user) {
+      dispatch({ type: 'SET_TASKS', payload: [] });
+      dispatch({ type: 'SET_HABITS', payload: [] });
+      return;
+    }
+
     const fetchInitialData = async () => {
       try {
-        const sessionId = getSessionId();
+        console.log('🔄 Fetching user data for user ID:', user.id);
         
         // Fetch tasks
         const { data: tasksData, error: tasksError } = await supabase
           .from('tasks')
           .select('*')
-          .eq('session_id', sessionId);
+          .eq('user_id', user.id);
         
         if (tasksError) {
           console.error('Error fetching tasks from Supabase:', tasksError);
-        } else if (tasksData && tasksData.length > 0) {
+        } else if (tasksData) {
           const parsedTasks: Task[] = tasksData.map((t: any) => ({
             id: t.id,
             title: t.title,
@@ -301,11 +293,11 @@ export function AppProvider({ children }: AppProviderProps) {
         const { data: habitsData, error: habitsError } = await supabase
           .from('habits')
           .select('*')
-          .eq('session_id', sessionId);
+          .eq('user_id', user.id);
         
         if (habitsError) {
           console.error('Error fetching habits from Supabase:', habitsError);
-        } else if (habitsData && habitsData.length > 0) {
+        } else if (habitsData) {
           const parsedHabits: Habit[] = habitsData.map((h: any) => ({
             id: h.id,
             title: h.title,
@@ -321,14 +313,19 @@ export function AppProvider({ children }: AppProviderProps) {
     };
 
     fetchInitialData();
-  }, []);
+  }, [user]);
 
-  // 2. Custom dispatch wrapper to sync changes immediately to Supabase
+  // 3. Custom dispatch wrapper to sync changes immediately to Supabase
   const customDispatch = useCallback((action: Action) => {
     // Dispatch action to local state first for instant UI response
     dispatch(action);
 
-    const sessionId = getSessionId();
+    if (!user) {
+      console.warn('⚠️ No active user session. Skipping DB sync.');
+      return;
+    }
+
+    const sessionId = 'auth-session';
 
     try {
       switch (action.type) {
@@ -339,6 +336,7 @@ export function AppProvider({ children }: AppProviderProps) {
             .from('tasks')
             .upsert({
               id: task.id,
+              user_id: user.id,
               session_id: sessionId,
               title: task.title,
               description: task.description,
@@ -368,6 +366,7 @@ export function AppProvider({ children }: AppProviderProps) {
               .from('tasks')
               .upsert({
                 id: updated.id,
+                user_id: user.id,
                 session_id: sessionId,
                 title: updated.title,
                 description: updated.description,
@@ -398,7 +397,7 @@ export function AppProvider({ children }: AppProviderProps) {
             .from('tasks')
             .delete()
             .eq('id', taskId)
-            .eq('session_id', sessionId)
+            .eq('user_id', user.id)
             .then(({ error }) => {
               if (error) console.error(`Error deleting task "${taskTitle}":`, error);
               else console.log(`✅ Task "${taskTitle}" deleted from Supabase.`);
@@ -412,6 +411,7 @@ export function AppProvider({ children }: AppProviderProps) {
             .from('habits')
             .upsert({
               id: habit.id,
+              user_id: user.id,
               session_id: sessionId,
               title: habit.title,
               completed_today: habit.completedToday,
@@ -440,6 +440,7 @@ export function AppProvider({ children }: AppProviderProps) {
               .from('habits')
               .upsert({
                 id: habit.id,
+                user_id: user.id,
                 session_id: sessionId,
                 title: habit.title,
                 completed_today: nextCompletedToday,
@@ -465,6 +466,7 @@ export function AppProvider({ children }: AppProviderProps) {
               .from('habits')
               .upsert({
                 id: updated.id,
+                user_id: user.id,
                 session_id: sessionId,
                 title: updated.title,
                 completed_today: updated.completedToday,
@@ -487,12 +489,24 @@ export function AppProvider({ children }: AppProviderProps) {
     } catch (err) {
       console.error('Failed to sync to Supabase in customDispatch:', err);
     }
-  }, [dispatch, state.tasks, state.habits]);
+  }, [dispatch, state.tasks, state.habits, user]);
+
+  const signOut = useCallback(async () => {
+    try {
+      await supabase.auth.signOut();
+      setUser(null);
+    } catch (err) {
+      console.error('Error signing out:', err);
+    }
+  }, []);
 
   // Convenience actions
   const contextValue = useMemo(() => ({
     state,
     dispatch: customDispatch,
+    user,
+    loading,
+    signOut,
     addTask: (taskData: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'status'> & { status?: TaskStatus }) => {
       const newTask: Task = {
         status: 'Pending',
@@ -580,7 +594,7 @@ Firefly AI`,
     clearActiveEmailDraft: () => {
       customDispatch({ type: 'SET_ACTIVE_EMAIL_DRAFT', payload: null });
     }
-  }), [state, customDispatch]);
+  }), [state, customDispatch, user, loading, signOut]);
 
   return (
     <AppContext.Provider value={contextValue}>

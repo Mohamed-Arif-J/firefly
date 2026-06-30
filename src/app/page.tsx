@@ -1,843 +1,699 @@
-'use client'
+'use client';
 
-import { AppProvider, useApp } from '@/src/context/AppContext'
-import { Task } from '@/src/context/AppContext'
-import { useState, useEffect } from 'react'
-
-// Type declarations for Web Speech API
-declare global {
-  interface Window {
-    SpeechRecognition: any
-    webkitSpeechRecognition: any
-  }
-}
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean
-  interimResults: boolean
-  lang: string
-  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null
-  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null
-  onend: ((this: SpeechRecognition, ev: Event) => any) | null
-  start(): void
-  stop(): void
-  abort(): void
-}
-
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList
-  resultIndex: number
-}
-
-interface SpeechRecognitionResultList {
-  length: number
-  item(index: number): SpeechRecognitionResult
-  [index: number]: SpeechRecognitionResult
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean
-  length: number
-  item(index: number): SpeechRecognitionAlternative
-  [index: number]: SpeechRecognitionAlternative
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string
-  confidence: number
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string
-  message?: string
-}
+import { AppProvider, useApp } from '@/src/context/AppContext';
+import { Task, TaskStatus, UrgencyScore } from '@/src/context/AppContext';
+import { useState, useEffect } from 'react';
+import { supabase } from '@/src/lib/supabaseClient';
+import FirefliesBackground from '../components/FirefliesBackground';
 
 // ========================================
-// Top Hero Section - Anti-Panic Micro-Step Catalyst
+// Stats Tile Component
 // ========================================
-function AntiPanicMicroStepCatalyst() {
-  const { state } = useApp()
-  
-  // Get highest priority task that's not done
-  const highPriorityTask = state.tasks
-    .filter(task => task.status !== 'Done')
-    .sort((a, b) => {
-      const urgencyOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 }
-      return urgencyOrder[a.urgencyScore] - urgencyOrder[b.urgencyScore]
-    })[0]
+interface StatsTileProps {
+  label: string;
+  value: string | number;
+  description?: string;
+}
 
-  if (!highPriorityTask) {
-    return (
-      <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 rounded-2xl p-6 mb-6 border border-emerald-500/30 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-3 h-3 rounded-full bg-emerald-300 animate-pulse shadow-lg"></div>
-              <h2 className="text-2xl font-bold text-white">🎯 All Clear – Ready for Action</h2>
-            </div>
-            <p className="text-emerald-100 text-lg">No urgent tasks. Perfect time to plan ahead or tackle long-term goals.</p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  const urgencyColor = {
-    HIGH: 'from-red-600 to-red-700 border-red-500/30',
-    MEDIUM: 'from-amber-600 to-amber-700 border-amber-500/30',
-    LOW: 'from-blue-600 to-blue-700 border-blue-500/30'
-  }
-
+function StatsTile({ label, value, description }: StatsTileProps) {
   return (
-    <div className={`bg-gradient-to-r ${urgencyColor[highPriorityTask.urgencyScore]} rounded-2xl p-6 mb-6 border shadow-2xl`}>
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <div className="flex items-center gap-3 mb-3">
-            <span className="px-3 py-1 bg-white/20 backdrop-blur-sm text-white text-xs font-bold rounded-full border border-white/30">
-              {highPriorityTask.urgencyScore} PRIORITY
-            </span>
-            <span className="px-3 py-1 bg-white/20 backdrop-blur-sm text-white text-xs font-semibold rounded-full border border-white/30">
-              {highPriorityTask.estimatedHours}h estimated
-            </span>
-          </div>
-          <h2 className="text-2xl font-bold text-white mb-2">{highPriorityTask.title}</h2>
-          <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/20">
-            <p className="text-sm text-white/80 font-medium mb-2">🚀 IMMEDIATE FIRST STEP:</p>
-            <p className="text-xl text-white font-semibold">{highPriorityTask.immediateFirstStep}</p>
-          </div>
-        </div>
-        <div className="ml-6 text-right">
-          <p className="text-white/70 text-sm mb-1">Deadline</p>
-          <p className="text-white font-bold text-lg">
-            {highPriorityTask.deadline ? new Date(highPriorityTask.deadline).toLocaleDateString() : 'Not set'}
-          </p>
-        </div>
+    <div className="bg-slate-900/60 backdrop-blur-md p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between">
+      <div>
+        <p className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-2">{label}</p>
+        <p className="text-3xl font-extrabold text-white tracking-tight">{value}</p>
       </div>
+      {description && <p className="text-xs text-slate-400 mt-2">{description}</p>}
     </div>
-  )
+  );
 }
 
 // ========================================
-// Firefighter Engine Panel (Conditional)
+// Account / Settings Sub-component
 // ========================================
-function FirefighterEnginePanel() {
-  const { state, clearActiveEmailDraft, createFirefighterEmail } = useApp()
+function AccountSection() {
+  const { user } = useApp();
+  const [displayName, setDisplayName] = useState('');
+  const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [updating, setUpdating] = useState(false);
 
-  // Only render if we have an active email draft
-  if (!state.activeEmailDraft) return null
+  useEffect(() => {
+    if (user) {
+      setDisplayName(user.user_metadata?.display_name || '');
+    }
+  }, [user]);
 
-  const relatedTask = state.tasks.find(t => t.id === state.activeEmailDraft?.taskId)
-
-  return (
-    <div className="bg-gradient-to-br from-orange-900 to-red-900 rounded-2xl p-6 mb-6 border border-orange-500/40 shadow-2xl animate-pulse-slow">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-4 h-4 rounded-full bg-orange-400 animate-pulse shadow-lg"></div>
-        <h2 className="text-2xl font-bold text-white">🚨 Firefighter Engine Activated</h2>
-        <span className="ml-auto px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full animate-pulse">
-          ACTION REQUIRED
-        </span>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="bg-slate-900/50 backdrop-blur-md rounded-xl p-5 border border-orange-500/30">
-          <p className="text-orange-300 text-sm font-semibold mb-2">RELATED TASK</p>
-          <p className="text-white font-bold text-lg mb-1">{relatedTask?.title || 'Unknown Task'}</p>
-          <p className="text-orange-200 text-sm">Status: {relatedTask?.status || 'Unknown'}</p>
-        </div>
-
-        <div className="bg-slate-900/50 backdrop-blur-md rounded-xl p-5 border border-orange-500/30">
-          <p className="text-orange-300 text-sm font-semibold mb-2">AUTO-GENERATED EMAIL</p>
-          <p className="text-white font-bold mb-2">{state.activeEmailDraft.subject}</p>
-          <p className="text-orange-100 text-sm mb-3 line-clamp-2">{state.activeEmailDraft.body}</p>
-          <div className="flex gap-2">
-            <button 
-              onClick={() => {
-                alert(`Sending email to: ${state.activeEmailDraft?.recipient}\n\nIn production, this would integrate with SendGrid/Resend API`)
-                clearActiveEmailDraft()
-              }}
-              className="flex-1 px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
-            >
-              🚀 1-Click Send Email
-            </button>
-            <button
-              onClick={clearActiveEmailDraft}
-              className="px-4 py-3 bg-slate-700 text-white rounded-lg hover:bg-slate-600 transition-colors"
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ========================================
-// Side Panel - Input & Quick Actions
-// ========================================
-function SidePanel() {
-  const { state, addTask, toggleVoiceRecording, dispatch } = useApp()
-  const [taskForm, setTaskForm] = useState({
-    title: '',
-    description: '',
-    urgencyScore: 'MEDIUM' as 'HIGH' | 'MEDIUM' | 'LOW',
-    estimatedHours: 2,
-    immediateFirstStep: '',
-  })
-  const [chaosDump, setChaosDump] = useState('')
-  const [isParsing, setIsParsing] = useState(false)
-  const [parseError, setParseError] = useState<string | null>(null)
-  const [speechRecognition, setSpeechRecognition] = useState<SpeechRecognition | null>(null)
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!taskForm.title.trim()) return
-
-    addTask({
-      ...taskForm,
-      actionableChecklist: [],
-      deadline: new Date(Date.now() + 24 * 60 * 60 * 1000), // Tomorrow
-    })
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
     
-    setTaskForm({
-      title: '',
-      description: '',
-      urgencyScore: 'MEDIUM',
-      estimatedHours: 2,
-      immediateFirstStep: '',
-    })
-  }
+    setUpdating(true);
+    setStatusMessage(null);
 
-  const handleParseChaosDump = async () => {
-    if (!chaosDump.trim()) return
-    
-    setIsParsing(true)
-    setParseError(null)
-    
     try {
-      // Send POST request to our Gemini AI agent backend
-      const response = await fetch('/api/agent', {
+      const { error } = await supabase.auth.updateUser({
+        data: { display_name: displayName }
+      });
+
+      if (error) throw error;
+      
+      setStatusMessage({
+        text: 'Profile updated successfully',
+        type: 'success'
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        text: err.message || 'Failed to update profile',
+        type: 'error'
+      });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-900/60 backdrop-blur-md rounded-2xl p-6 md:p-8 border border-slate-800 shadow-2xl max-w-2xl mx-auto w-full">
+      <h2 className="text-2xl font-extrabold text-white mb-6">Account Details</h2>
+
+      {statusMessage && (
+        <div className={`p-4 rounded-xl border mb-6 text-sm ${
+          statusMessage.type === 'success'
+            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+            : 'bg-red-950/40 border-red-500/30 text-red-300'
+        }`}>
+          {statusMessage.text}
+        </div>
+      )}
+
+      <form onSubmit={handleUpdateProfile} className="space-y-6">
+        <div>
+          <label className="block text-sm font-semibold text-slate-300 mb-2">Email Address</label>
+          <input
+            type="text"
+            value={user?.email || ''}
+            disabled
+            className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-400 cursor-not-allowed outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-slate-300 mb-2">Display Name</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Enter your name"
+            className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={updating}
+          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02] disabled:opacity-50"
+        >
+          {updating ? 'Updating...' : 'Save Profile Details'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ========================================
+// Manual Task Creation Sub-component
+// ========================================
+function AddTaskSection({ onSuccess }: { onSuccess: () => void }) {
+  const { addTask } = useApp();
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [urgencyScore, setUrgencyScore] = useState<UrgencyScore>('MEDIUM');
+  const [estimatedHours, setEstimatedHours] = useState(1);
+  const [immediateFirstStep, setImmediateFirstStep] = useState('');
+  const [deadline, setDeadline] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+
+    setSubmitting(true);
+    try {
+      await addTask({
+        title: title.trim(),
+        description: description.trim(),
+        urgencyScore,
+        estimatedHours,
+        immediateFirstStep: immediateFirstStep.trim() || 'Review requirements',
+        actionableChecklist: ['Review primary targets', 'Execute task checklist'],
+        deadline: deadline ? new Date(deadline) : null
+      });
+
+      // Clear fields
+      setTitle('');
+      setDescription('');
+      setUrgencyScore('MEDIUM');
+      setEstimatedHours(1);
+      setImmediateFirstStep('');
+      setDeadline('');
+      
+      onSuccess();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-900/60 backdrop-blur-md rounded-2xl p-6 md:p-8 border border-slate-800 shadow-2xl max-w-2xl mx-auto w-full">
+      <h2 className="text-2xl font-extrabold text-white mb-6">Create New Task</h2>
+      
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div>
+          <label className="block text-sm font-semibold text-slate-300 mb-2">Task Name</label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Write task objective"
+            required
+            className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-slate-300 mb-2">Description</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Provide context and notes for this task"
+            rows={3}
+            className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none resize-none"
+          />
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">Urgency Level</label>
+            <select
+              value={urgencyScore}
+              onChange={(e) => setUrgencyScore(e.target.value as UrgencyScore)}
+              className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+            >
+              <option value="HIGH">High Priority</option>
+              <option value="MEDIUM">Medium Priority</option>
+              <option value="LOW">Low Priority</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">Estimated Effort (Hours)</label>
+            <input
+              type="number"
+              min="0.5"
+              step="0.5"
+              value={estimatedHours}
+              onChange={(e) => setEstimatedHours(parseFloat(e.target.value))}
+              className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">First Immediate Action Step</label>
+            <input
+              type="text"
+              value={immediateFirstStep}
+              onChange={(e) => setImmediateFirstStep(e.target.value)}
+              placeholder="Concrete 5-minute step"
+              className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">Target Date (Deadline)</label>
+            <input
+              type="datetime-local"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02] disabled:opacity-50"
+        >
+          {submitting ? 'Creating...' : 'Create Task'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ========================================
+// Main Dashboard View Component
+// ========================================
+function Dashboard() {
+  const { state, signOut, updateTaskStatus } = useApp();
+  const [activeTab, setActiveTab] = useState<'tasks' | 'add' | 'accounts'>('tasks');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [orderedTaskIds, setOrderedTaskIds] = useState<string[]>([]);
+
+  // Compute stats accurately
+  const totalTasks = state.tasks.length;
+  const completedTasks = state.tasks.filter(t => t.status === 'Done').length;
+  const missedTasks = state.tasks.filter(t => t.status === 'Missed').length;
+  
+  // Calculate best streak from habits
+  const bestStreak = state.habits.length > 0 
+    ? Math.max(...state.habits.map(h => h.streakDays), 0)
+    : 0;
+
+  // Handle AI dynamic scheduling
+  const handleAISchedule = async () => {
+    if (state.tasks.length === 0) {
+      setStatusMessage('No tasks available to schedule');
+      setTimeout(() => setStatusMessage(null), 3000);
+      return;
+    }
+
+    setIsScheduling(true);
+    setStatusMessage('Generating optimal AI schedule...');
+    try {
+      const response = await fetch('/api/schedule', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ taskInput: chaosDump }),
-      })
+        body: JSON.stringify({
+          tasks: state.tasks
+        })
+      });
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        // Handle API errors
-        const errorMessage = data.error || data.details || 'Failed to parse chaos dump'
-        throw new Error(errorMessage)
-      }
-
-      if (!data.success || !data.task) {
-        throw new Error('Invalid response from AI agent')
-      }
-
-      // Extract the structured task from the response
-      const parsedTask = data.task
-      
-      // Create a new Task object matching our frontend interface
-      const newTask: Task = {
-        id: `task-${Date.now()}`,
-        title: parsedTask.title,
-        description: parsedTask.description,
-        urgencyScore: parsedTask.urgencyScore,
-        status: 'Pending',
-        estimatedHours: parsedTask.estimatedHours,
-        immediateFirstStep: parsedTask.immediateFirstStep,
-        actionableChecklist: parsedTask.actionableChecklist,
-        deadline: new Date(parsedTask.deadline),
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }
-
-      // Use our context dispatch to add the task to global state
-      dispatch({ type: 'ADD_TASK', payload: newTask })
-      
-      // Clear the textarea input
-      setChaosDump('')
-      
-      // Show success notification
-      setParseError(null)
-      // In a production app, you might show a toast notification here
-      console.log(`✅ AI parsed task: "${newTask.title}" (${newTask.urgencyScore} priority)`)
-
-    } catch (error: any) {
-      // Handle errors gracefully
-      console.error('Error parsing chaos dump:', error)
-      setParseError(error.message || 'Failed to parse with AI. Please try again.')
-      
-      // Fallback: Use the old mock parsing as backup
-      console.log('⚠️ Falling back to basic parsing...')
-      const lines = chaosDump.split('\n').filter(line => line.trim())
-      addTask({
-        title: lines[0]?.substring(0, 50) || 'Chaos Dump Task',
-        description: chaosDump,
-        urgencyScore: 'MEDIUM',
-        estimatedHours: 2,
-        immediateFirstStep: 'Review and organize this task',
-        actionableChecklist: lines.slice(1, 4),
-        deadline: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
-      })
-      setChaosDump('')
-      
-    } finally {
-      setIsParsing(false)
-    }
-  }
-
-  const toggleHabit = (habitId: string) => {
-    dispatch({ type: 'TOGGLE_HABIT', payload: habitId })
-  }
-
-  // Clean up speech recognition on component unmount
-  useEffect(() => {
-    return () => {
-      if (speechRecognition) {
-        speechRecognition.stop()
-        setSpeechRecognition(null)
-      }
-      if (state.isRecordingVoice) {
-        dispatch({ type: 'SET_IS_RECORDING_VOICE', payload: false })
-      }
-    }
-  }, [speechRecognition, state.isRecordingVoice])
-
-  // Real Web Speech API implementation
-  const handleVoiceRecording = () => {
-    try {
-      // Check if browser supports Speech Recognition
-      const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition
-      
-      if (!SpeechRecognitionAPI) {
-        throw new Error('Your browser does not support speech recognition. Try Chrome or Edge.')
-      }
-
-      if (!state.isRecordingVoice) {
-        // Starting recording
-        const recognition = new SpeechRecognitionAPI()
-        
-        // Configure recognition parameters
-        recognition.continuous = true
-        recognition.interimResults = false
-        recognition.lang = 'en-US'
-
-        // Set up event handlers
-        recognition.onresult = (event: any) => {
-          const transcript = event.results[event.results.length - 1][0].transcript
-          
-          // Append spoken text to the chaos dump textarea
-          setChaosDump(prev => {
-            const separator = prev.trim() ? '\n' : ''
-            return prev + separator + transcript
-          })
-          
-          // Update last voice recording in state
-          dispatch({ type: 'SET_LAST_VOICE_RECORDING', payload: transcript })
-          
-          console.log('🎤 Voice captured:', transcript)
-        }
-
-        recognition.onerror = (event: any) => {
-          console.error('Speech recognition error:', event.error)
-          
-          if (event.error === 'not-allowed') {
-            throw new Error('Microphone access denied. Please allow microphone permissions.')
-          } else if (event.error === 'no-speech') {
-            // This is okay, just no speech detected
-            console.log('No speech detected')
-          } else {
-            throw new Error(`Speech recognition error: ${event.error}`)
-          }
-        }
-
-        recognition.onend = () => {
-          console.log('Speech recognition ended')
-          // Only reset if we're not intentionally stopping
-          if (state.isRecordingVoice) {
-            dispatch({ type: 'SET_IS_RECORDING_VOICE', payload: false })
-            setSpeechRecognition(null)
-          }
-        }
-
-        // Start recognition
-        recognition.start()
-        setSpeechRecognition(recognition)
-        dispatch({ type: 'SET_IS_RECORDING_VOICE', payload: true })
-        
-        console.log('🎤 Started voice recording...')
-
+      const data = await response.json();
+      if (data.success && Array.isArray(data.order)) {
+        setOrderedTaskIds(data.order);
+        setStatusMessage('Tasks rearranged successfully by AI schedule');
       } else {
-        // Stopping recording
-        if (speechRecognition) {
-          speechRecognition.stop()
-          setSpeechRecognition(null)
-        }
-        dispatch({ type: 'SET_IS_RECORDING_VOICE', payload: false })
-        
-        console.log('🎤 Stopped voice recording')
+        // Mapped fallback sorting if AI fails
+        const fallbackOrder = [...state.tasks]
+          .sort((a, b) => {
+            const urgencyVal = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+            return urgencyVal[a.urgencyScore] - urgencyVal[b.urgencyScore];
+          })
+          .map(t => t.id);
+        setOrderedTaskIds(fallbackOrder);
+        setStatusMessage('AI scheduling fallback: prioritized by urgency score');
       }
-
-    } catch (error: any) {
-      console.error('Voice recording error:', error)
-      
-      // Show user-friendly error message
-      alert(`Voice recording failed: ${error.message}`)
-      
-      // Reset state on error
-      if (speechRecognition) {
-        speechRecognition.stop()
-        setSpeechRecognition(null)
-      }
-      dispatch({ type: 'SET_IS_RECORDING_VOICE', payload: false })
+    } catch (err) {
+      console.error('Scheduling error:', err);
+      setStatusMessage('Failed to connect to scheduler service');
+    } finally {
+      setIsScheduling(false);
+      setTimeout(() => setStatusMessage(null), 5000);
     }
-  }
+  };
+
+  // Arrange tasks list based on AI recommended order or urgency
+  const sortedTasks = [...state.tasks].sort((a, b) => {
+    if (orderedTaskIds.length > 0) {
+      const indexA = orderedTaskIds.indexOf(a.id);
+      const indexB = orderedTaskIds.indexOf(b.id);
+      
+      // If both are in the ordered array, respect AI order
+      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+      // Put unscheduled tasks at the end
+      if (indexA !== -1) return -1;
+      if (indexB !== -1) return 1;
+    }
+    
+    // Default fallback sorting
+    const urgencyVal = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    return urgencyVal[a.urgencyScore] - urgencyVal[b.urgencyScore];
+  });
+
+  const handleStatusToggle = (task: Task, newStatus: TaskStatus) => {
+    updateTaskStatus(task.id, newStatus);
+  };
+
+  const urgencyBadgeColor = {
+    HIGH: 'bg-red-500/20 text-red-300 border-red-500/30',
+    MEDIUM: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+    LOW: 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+  };
 
   return (
-    <div className="bg-slate-900 rounded-2xl p-6 border border-slate-700 shadow-2xl h-full">
-      <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-        <span>⚡</span> Quick Actions
-      </h2>
-      
-      <div className="space-y-6">
-        {/* Manual Task Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-semibold text-slate-300 mb-2">Task Title</label>
-            <input
-              type="text"
-              value={taskForm.title}
-              onChange={(e) => setTaskForm({...taskForm, title: e.target.value})}
-              placeholder="What needs to get done?"
-              className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-              required
-            />
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col relative z-10">
+      {/* Top Navbar */}
+      <nav className="sticky top-0 z-40 backdrop-blur-md bg-slate-950/80 border-b border-slate-900 px-4 md:px-8 py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <span className="font-extrabold text-white text-2xl tracking-tight bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+              Firefly
+            </span>
+            <div className="hidden md:flex items-center gap-2">
+              <button 
+                onClick={() => setActiveTab('tasks')}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'tasks' ? 'bg-slate-900 text-white border border-slate-800' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Tasks
+              </button>
+              <button 
+                onClick={() => setActiveTab('add')}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'add' ? 'bg-slate-900 text-white border border-slate-800' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Add Task
+              </button>
+              <button 
+                onClick={() => setActiveTab('accounts')}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'accounts' ? 'bg-slate-900 text-white border border-slate-800' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Accounts
+              </button>
+            </div>
           </div>
           
-          <div>
-            <label className="block text-sm font-semibold text-slate-300 mb-2">Immediate First Step</label>
-            <input
-              type="text"
-              value={taskForm.immediateFirstStep}
-              onChange={(e) => setTaskForm({...taskForm, immediateFirstStep: e.target.value})}
-              placeholder="What's the very next action?"
-              className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-            />
+          <div className="hidden md:flex items-center gap-4">
+            <button
+              onClick={signOut}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-855 text-slate-300 hover:text-white border border-slate-805 rounded-xl text-xs font-bold transition-all"
+            >
+              Sign Out
+            </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          {/* Mobile hamburger menu button */}
+          <div className="md:hidden">
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="p-2 text-slate-400 hover:text-white focus:outline-none"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* Mobile Drawer Menu */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden">
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIsMobileMenuOpen(false)}
+          ></div>
+          
+          <div className="relative w-80 max-w-[85vw] bg-slate-900 border-r border-slate-800 p-6 flex flex-col justify-between z-50">
             <div>
-              <label className="block text-sm font-semibold text-slate-300 mb-2">Urgency</label>
-              <select
-                value={taskForm.urgencyScore}
-                onChange={(e) => setTaskForm({...taskForm, urgencyScore: e.target.value as any})}
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              <div className="flex items-center justify-between mb-8">
+                <span className="font-extrabold text-white text-xl">Firefly</span>
+                <button 
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <nav className="space-y-3">
+                <button 
+                  onClick={() => { setActiveTab('tasks'); setIsMobileMenuOpen(false); }}
+                  className={`w-full text-left px-4 py-3 rounded-xl font-semibold transition-all ${
+                    activeTab === 'tasks' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  Tasks
+                </button>
+                <button 
+                  onClick={() => { setActiveTab('add'); setIsMobileMenuOpen(false); }}
+                  className={`w-full text-left px-4 py-3 rounded-xl font-semibold transition-all ${
+                    activeTab === 'add' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  Add Task
+                </button>
+                <button 
+                  onClick={() => { setActiveTab('accounts'); setIsMobileMenuOpen(false); }}
+                  className={`w-full text-left px-4 py-3 rounded-xl font-semibold transition-all ${
+                    activeTab === 'accounts' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  Accounts
+                </button>
+              </nav>
+            </div>
+            
+            <div className="border-t border-slate-800 pt-6">
+              <button
+                onClick={() => { signOut(); setIsMobileMenuOpen(false); }}
+                className="w-full py-3 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white rounded-xl text-sm font-bold transition-all border border-slate-750"
               >
-                <option value="HIGH">🔴 High</option>
-                <option value="MEDIUM">🟡 Medium</option>
-                <option value="LOW">🟢 Low</option>
-              </select>
+                Sign Out
+              </button>
             </div>
-            <div>
-              <label className="block text-sm font-semibold text-slate-300 mb-2">Hours</label>
-              <input
-                type="number"
-                min="0.5"
-                step="0.5"
-                value={taskForm.estimatedHours}
-                onChange={(e) => setTaskForm({...taskForm, estimatedHours: parseFloat(e.target.value)})}
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-              />
-            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Page Content */}
+      <main className="flex-1 p-4 md:p-8">
+        <div className="max-w-7xl mx-auto">
+          {activeTab === 'accounts' && <AccountSection />}
+          {activeTab === 'add' && <AddTaskSection onSuccess={() => setActiveTab('tasks')} />}
+          
+          {activeTab === 'tasks' && (
+            <>
+              {/* Header Tiles */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                <StatsTile label="Days Consistent" value={bestStreak} description="Longest habit streak completed" />
+                <StatsTile label="Total Tasks" value={totalTasks} description="All scheduled workspace items" />
+                <StatsTile label="Completed" value={completedTasks} description="Tasks marked done" />
+                <StatsTile label="Missed" value={missedTasks} description="Items past target deadlines" />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row gap-4 mb-8">
+                <button
+                  onClick={handleAISchedule}
+                  disabled={isScheduling}
+                  className="px-6 py-3.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02] disabled:opacity-50"
+                >
+                  {isScheduling ? 'Scheduling...' : 'Make Timetable'}
+                </button>
+              </div>
+
+              {statusMessage && (
+                <div className="mb-8 p-4 bg-indigo-950/40 border border-indigo-500/30 rounded-xl text-indigo-300 text-sm flex items-center justify-between">
+                  <span>{statusMessage}</span>
+                  <button onClick={() => setStatusMessage(null)} className="text-indigo-400 hover:text-white font-bold ml-2">Dismiss</button>
+                </div>
+              )}
+
+              {/* Tasks List */}
+              <div className="bg-slate-900/60 backdrop-blur-md rounded-2xl p-6 border border-slate-800 shadow-2xl">
+                <h2 className="text-xl font-bold text-white mb-6">Prioritized Task Feed</h2>
+                
+                <div className="space-y-4">
+                  {sortedTasks.map((task, index) => (
+                    <div key={task.id} className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 hover:border-slate-700 transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      <div className="flex-1">
+                        <div className="flex flex-wrap items-center gap-3 mb-2">
+                          <span className="text-slate-500 text-xs font-bold font-mono">
+                            Order {index + 1}
+                          </span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${urgencyBadgeColor[task.urgencyScore]}`}>
+                            {task.urgencyScore}
+                          </span>
+                          {task.estimatedHours && (
+                            <span className="text-slate-400 text-xs font-medium">
+                              Estimated: {task.estimatedHours}h
+                            </span>
+                          )}
+                          {task.deadline && (
+                            <span className="text-slate-400 text-xs font-medium">
+                              Due: {new Date(task.deadline).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-lg font-bold text-white">{task.title}</h3>
+                        <p className="text-sm text-slate-400 mt-1">{task.description || 'No additional details provided'}</p>
+                        <div className="text-xs text-slate-500 mt-2">
+                          Next action: {task.immediateFirstStep}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-stretch md:self-auto justify-end">
+                        {task.status !== 'Done' ? (
+                          <button
+                            onClick={() => handleStatusToggle(task, 'Done')}
+                            className="px-4 py-2 bg-slate-900 hover:bg-emerald-600 hover:text-white text-slate-300 font-bold text-xs rounded-lg border border-slate-800 transition-all"
+                          >
+                            Mark Done
+                          </button>
+                        ) : (
+                          <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-bold rounded-lg">
+                            Done
+                          </span>
+                        )}
+                        <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${
+                          task.status === 'Pending' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                          task.status === 'Stuck' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
+                          task.status === 'Missed' ? 'bg-red-500/10 text-red-400 border-red-500/20' : ''
+                        }`}>
+                          {task.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {sortedTasks.length === 0 && (
+                    <div className="text-center py-12 text-slate-500 text-lg">
+                      No tasks yet. Click Add Task above to get started.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ========================================
+// Responsive Sign-In Screen Component
+// ========================================
+function SignInScreen() {
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const handleMagicLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+
+    setLoading(true);
+    setMessage(null);
+
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: {
+          emailRedirectTo: typeof window !== 'undefined' ? window.location.origin + '/auth/callback' : undefined,
+        }
+      });
+
+      if (error) throw error;
+
+      setMessage({
+        text: 'Login/Signup link sent! Please check your email inbox to log in.',
+        type: 'success'
+      });
+      setEmail('');
+    } catch (err: any) {
+      console.error('Auth error:', err);
+      setMessage({
+        text: err.message || 'Auth process failed. Please check details and try again.',
+        type: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 relative overflow-hidden z-10">
+      <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] rounded-full bg-blue-500/10 blur-[120px] pointer-events-none"></div>
+      <div className="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] rounded-full bg-purple-500/10 blur-[120px] pointer-events-none"></div>
+
+      <div className="w-full max-w-md bg-slate-900/60 backdrop-blur-xl border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl z-10 relative">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-purple-600 text-white font-extrabold text-2xl mb-4 shadow-lg shadow-blue-500/20">
+            F
+          </div>
+          <h2 className="text-3xl font-extrabold text-white tracking-tight mb-2">Welcome to Firefly</h2>
+          <p className="text-slate-400">Autonomous calendar tasks scheduling optimizer</p>
+        </div>
+
+        {message && (
+          <div className={`p-4 rounded-xl border mb-6 text-sm ${
+            message.type === 'success'
+              ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+              : 'bg-red-950/40 border-red-500/30 text-red-300'
+          }`}>
+            {message.text}
+          </div>
+        )}
+
+        <form onSubmit={handleMagicLink} className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-slate-300 mb-2">Email Address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+              className="w-full px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+              required
+              disabled={loading}
+            />
           </div>
 
           <button
             type="submit"
-            className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+            disabled={loading}
+            className="w-full py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
           >
-            ➕ Add Task
-          </button>
-        </form>
-
-        {/* Chaos Dump */}
-        <div className="pt-6 border-t border-slate-700">
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-semibold text-slate-300">🌪️ Chaos Dump</label>
-            <button
-              type="button"
-              onClick={handleParseChaosDump}
-              disabled={!chaosDump.trim() || isParsing}
-              className="text-sm text-blue-400 hover:text-blue-300 font-semibold disabled:text-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-            >
-              {isParsing ? (
-                <>
-                  <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
-                  Parsing...
-                </>
-              ) : (
-                'Parse with AI →'
-              )}
-            </button>
-          </div>
-          <textarea
-            value={chaosDump}
-            onChange={(e) => {
-              setChaosDump(e.target.value)
-              setParseError(null) // Clear error when user types
-            }}
-            placeholder="Paste messy notes, emails, thoughts... Firefly will organize it"
-            rows={4}
-            className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none transition-all"
-          />
-          
-          {/* Error message display */}
-          {parseError && (
-            <div className="mt-2 p-3 bg-red-900/30 border border-red-700/50 rounded-lg">
-              <div className="flex items-start gap-2">
-                <span className="text-red-400 text-sm">⚠️</span>
-                <div>
-                  <p className="text-red-300 text-sm font-medium">AI Parsing Error</p>
-                  <p className="text-red-400 text-xs mt-1">{parseError}</p>
-                  <p className="text-red-400/70 text-xs mt-1">
-                    Using basic parsing as fallback. Check your API key in .env.local
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Loading overlay */}
-          {isParsing && (
-            <div className="mt-2 p-3 bg-blue-900/30 border border-blue-700/50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
-                <div>
-                  <p className="text-blue-300 text-sm font-medium">AI is analyzing your chaos dump...</p>
-                  <p className="text-blue-400/70 text-xs mt-1">
-                    Gemini 3.5 Flash is extracting tasks, urgency, and deadlines
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Help text */}
-          {!chaosDump.trim() && !isParsing && !parseError && (
-            <div className="mt-2 text-xs text-slate-500">
-              💡 Try pasting: "Need to prepare client presentation by Friday, update financials, coordinate with marketing"
-            </div>
-          )}
-        </div>
-
-        {/* Voice Dump */}
-        <div className="pt-6 border-t border-slate-700">
-          <label className="block text-sm font-semibold text-slate-300 mb-3">🎤 Voice Dump</label>
-          <button
-            onClick={handleVoiceRecording}
-            className={`w-full flex items-center justify-center gap-3 px-4 py-4 rounded-lg font-bold transition-all ${
-              state.isRecordingVoice 
-                ? 'bg-gradient-to-r from-red-600 to-red-700 text-white animate-pulse shadow-lg shadow-red-500/50' 
-                : 'bg-gradient-to-r from-purple-600 to-purple-700 text-white hover:from-purple-700 hover:to-purple-800 shadow-lg hover:shadow-xl'
-            }`}
-          >
-            {state.isRecordingVoice ? (
-              <>
-                <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
-                <span>● RECORDING... Speak now</span>
-              </>
+            {loading ? (
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
             ) : (
-              <>
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-                </svg>
-                <span>Start Voice Note</span>
-              </>
+              'Login/Signup'
             )}
           </button>
-          {state.lastVoiceRecording.text && (
-            <div className="mt-3 p-3 bg-purple-900/30 rounded-lg border border-purple-500/30">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs text-purple-300 mb-1">Last voice note:</p>
-                  <p className="text-white text-sm">{state.lastVoiceRecording.text}</p>
-                </div>
-                <button
-                  onClick={() => {
-                    // Append last recording to chaos dump
-                    setChaosDump(prev => {
-                      const separator = prev.trim() ? '\n' : ''
-                      return prev + separator + state.lastVoiceRecording.text
-                    })
-                  }}
-                  className="text-xs text-purple-400 hover:text-purple-300 font-medium"
-                >
-                  Add to dump →
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Habits & Goals */}
-        <div className="pt-6 border-t border-slate-700">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <span>✨</span> Habits & Goals
-          </h3>
-          <div className="space-y-3">
-            {state.habits.map(habit => (
-              <div key={habit.id} className="flex items-center justify-between p-4 bg-slate-800 rounded-lg border border-slate-600 hover:border-slate-500 transition-colors">
-                <div>
-                  <p className="font-semibold text-white">{habit.title}</p>
-                  <p className="text-sm text-slate-400">🔥 {habit.streakDays} day streak</p>
-                </div>
-                <button 
-                  onClick={() => toggleHabit(habit.id)}
-                  className={`w-10 h-10 rounded-full border-2 flex items-center justify-center transition-all ${
-                    habit.completedToday 
-                      ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg shadow-emerald-500/50' 
-                      : 'border-slate-500 hover:border-emerald-500 hover:bg-slate-700'
-                  }`}
-                >
-                  {habit.completedToday && <span className="text-xl">✓</span>}
-                </button>
-              </div>
-            ))}
-            <button className="w-full p-4 border-2 border-dashed border-slate-600 rounded-lg text-slate-400 hover:text-white hover:border-slate-500 transition-colors font-semibold">
-              + Add New Habit
-            </button>
-          </div>
-        </div>
+        </form>
       </div>
     </div>
-  )
+  );
 }
 
 // ========================================
-// Main Panel - Smart Timetable & Prioritized Feed
+// Dashboard Wrapper & Auth Check
 // ========================================
-function MainPanel() {
-  const { state, updateTaskStatus, markTaskAsMissed, createFirefighterEmail } = useApp()
+function DashboardWrapper() {
+  const { user, loading } = useApp();
 
-  const urgencyGroups = {
-    HIGH: state.tasks.filter(t => t.urgencyScore === 'HIGH'),
-    MEDIUM: state.tasks.filter(t => t.urgencyScore === 'MEDIUM'),
-    LOW: state.tasks.filter(t => t.urgencyScore === 'LOW'),
-  }
-
-  const handleStatusChange = (taskId: string, newStatus: 'Pending' | 'Done' | 'Stuck' | 'Missed') => {
-    updateTaskStatus(taskId, newStatus)
-    
-    // Trigger firefighter panel when task is stuck or missed
-    if (newStatus === 'Stuck' || newStatus === 'Missed') {
-      const task = state.tasks.find(t => t.id === taskId)
-      if (task) {
-        createFirefighterEmail(task, 'team@example.com')
-      }
-    }
-  }
-
-  const urgencyConfig = {
-    HIGH: {
-      label: 'HIGH PRIORITY',
-      icon: '🔴',
-      gradient: 'from-red-900/50 to-red-800/50',
-      border: 'border-red-500/30',
-      badge: 'bg-red-500/20 text-red-300 border-red-500/40'
-    },
-    MEDIUM: {
-      label: 'MEDIUM PRIORITY',
-      icon: '🟡',
-      gradient: 'from-amber-900/50 to-amber-800/50',
-      border: 'border-amber-500/30',
-      badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-    },
-    LOW: {
-      label: 'LOW PRIORITY',
-      icon: '🟢',
-      gradient: 'from-emerald-900/50 to-emerald-800/50',
-      border: 'border-emerald-500/30',
-      badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-    }
-  }
-
-  const statusConfig = {
-    Pending: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-    Done: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-    Stuck: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
-    Missed: 'bg-red-500/20 text-red-300 border-red-500/40'
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-slate-400 font-medium animate-pulse text-lg">Initializing Firefly...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="bg-slate-900 rounded-2xl p-6 border border-slate-700 shadow-2xl">
-      <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-        <span>📊</span> Smart Timetable & Task Feed
-      </h2>
-      
-      <div className="space-y-6">
-        {Object.entries(urgencyGroups).map(([urgency, tasks]) => {
-          const config = urgencyConfig[urgency as keyof typeof urgencyConfig]
-          
-          if (tasks.length === 0) return null
-
-          return (
-            <div key={urgency} className={`bg-gradient-to-br ${config.gradient} rounded-xl p-5 border ${config.border}`}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <span>{config.icon}</span>
-                  <span>{config.label}</span>
-                </h3>
-                <span className={`px-3 py-1 rounded-full text-sm font-bold border ${config.badge}`}>
-                  {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
-                </span>
-              </div>
-              
-              <div className="space-y-3">
-                {tasks.map(task => (
-                  <div key={task.id} className="bg-slate-900/70 backdrop-blur-sm rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex-1">
-                        <h4 className="font-bold text-white text-lg mb-1">{task.title}</h4>
-                        <p className="text-slate-400 text-sm mb-2">{task.description || 'No description'}</p>
-                        <div className="flex items-center gap-3 text-sm">
-                          <span className="text-slate-500">⚡ {task.immediateFirstStep}</span>
-                        </div>
-                      </div>
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ml-3 ${statusConfig[task.status]}`}>
-                        {task.status}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-700">
-                      <div className="flex items-center gap-3 text-xs text-slate-400">
-                        <span>⏱️ {task.estimatedHours}h</span>
-                        {task.deadline && (
-                          <span>📅 {new Date(task.deadline).toLocaleDateString()}</span>
-                        )}
-                      </div>
-                      
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleStatusChange(task.id, 'Done')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            task.status === 'Done'
-                              ? 'bg-emerald-500 text-white shadow-lg'
-                              : 'bg-slate-800 text-slate-400 hover:bg-emerald-500 hover:text-white border border-slate-600'
-                          }`}
-                        >
-                          ✓ Done
-                        </button>
-                        <button
-                          onClick={() => handleStatusChange(task.id, 'Stuck')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            task.status === 'Stuck'
-                              ? 'bg-orange-500 text-white shadow-lg'
-                              : 'bg-slate-800 text-slate-400 hover:bg-orange-500 hover:text-white border border-slate-600'
-                          }`}
-                        >
-                          ⚠️ Stuck
-                        </button>
-                        <button
-                          onClick={() => handleStatusChange(task.id, 'Missed')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                            task.status === 'Missed'
-                              ? 'bg-red-500 text-white shadow-lg'
-                              : 'bg-slate-800 text-slate-400 hover:bg-red-500 hover:text-white border border-slate-600'
-                          }`}
-                        >
-                          ✕ Missed
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )
-        })}
-
-        {state.tasks.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-slate-500 text-lg">No tasks yet. Add your first task to get started!</p>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ========================================
-// Main Dashboard Component
-// ========================================
-function Dashboard() {
-  const { state } = useApp()
-
-  return (
-    <div className="min-h-screen bg-slate-950 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <header className="mb-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-            <div>
-              <h1 className="text-4xl font-bold text-white mb-2 flex items-center gap-3">
-                <span className="text-5xl">🔥</span>
-                Firefly AI
-              </h1>
-              <p className="text-slate-400 text-lg">Autonomous productivity agent with Firefighter loop</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="hidden md:block text-right bg-slate-900 px-6 py-3 rounded-xl border border-slate-700">
-                <p className="text-sm text-slate-400 mb-1">Active Tasks</p>
-                <p className="font-bold text-white text-2xl">{state.tasks.filter(t => t.status !== 'Done').length}</p>
-              </div>
-              <button className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-bold rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all shadow-lg hover:shadow-xl transform hover:scale-105">
-                🤖 Generate Weekly Plan
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* Top Hero Section */}
-        <AntiPanicMicroStepCatalyst />
-        <FirefighterEnginePanel />
-
-        {/* Main Dashboard Grid */}
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Side Panel - Input & Quick Actions */}
-          <div className="lg:col-span-1">
-            <SidePanel />
-          </div>
-
-          {/* Main Panel - Timetable & Task Feed */}
-          <div className="lg:col-span-2">
-            <MainPanel />
-          </div>
-        </div>
-
-        {/* Footer Stats */}
-        <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-slate-900 p-5 rounded-xl border border-slate-700">
-            <p className="text-sm text-slate-400 mb-1">Total Tasks</p>
-            <p className="text-3xl font-bold text-white">{state.tasks.length}</p>
-          </div>
-          <div className="bg-slate-900 p-5 rounded-xl border border-slate-700">
-            <p className="text-sm text-slate-400 mb-1">Completed</p>
-            <p className="text-3xl font-bold text-emerald-400">{state.tasks.filter(t => t.status === 'Done').length}</p>
-          </div>
-          <div className="bg-slate-900 p-5 rounded-xl border border-slate-700">
-            <p className="text-sm text-slate-400 mb-1">Active Habits</p>
-            <p className="text-3xl font-bold text-purple-400">{state.habits.length}</p>
-          </div>
-          <div className="bg-slate-900 p-5 rounded-xl border border-slate-700">
-            <p className="text-sm text-slate-400 mb-1">Best Streak</p>
-            <p className="text-3xl font-bold text-orange-400">{Math.max(...state.habits.map(h => h.streakDays), 0)} days</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+    <>
+      <FirefliesBackground />
+      {!user ? <SignInScreen /> : <Dashboard />}
+    </>
+  );
 }
 
 // ========================================
@@ -846,8 +702,7 @@ function Dashboard() {
 export default function Home() {
   return (
     <AppProvider>
-      <Dashboard />
+      <DashboardWrapper />
     </AppProvider>
-  )
-
+  );
 }
